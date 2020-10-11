@@ -3,8 +3,11 @@ A simple raytracer written in C.
 
 A simple, multi-threaded raytracer. Tweak the performance with the following constants:
 
+
 raytrace.h:
+
 GAMMA 2.2
+
 EXPOSURE 1.0
 
 SAMPLES 4               // Number of samples taken for each light bounce's indirect light.
@@ -17,6 +20,7 @@ LIGHT_MAX 16            // Maximum number of lights allowed in a scene.
 
 
 raytrace.c:
+
 THREAD_COUNT 7          // Number of threads to create when multi-threading.
 
 
