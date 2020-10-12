@@ -33,7 +33,7 @@ float vec3_LengthSquared(Vector3* vec){
     float x = vec->x;
     float y = vec->y;
     float z = vec->z;
-    float len_sq = powf(x, 2.0) + powf(y, 2.0) + powf(z, 2.0);
+    float len_sq = (x * x) + (y * y) + (z * z);
     return len_sq;
 }
 
@@ -556,7 +556,8 @@ Color light_GetDirectLightContribution(Light* light, Intersection* source_intsec
     if(reflect_cos_theta < 0.0f){
         reflect_cos_theta = 0.0f;
     }
-    float specular_value = powf(reflect_cos_theta, 50.0f) * intensity;
+    float mat_reflect = (*source_intsec).mat.reflectance;
+    float specular_value = powf(reflect_cos_theta, mat_reflect*mat_reflect*1000.0f) * intensity;
     float specular_coeff = (*source_intsec).mat.specular;
     col_MulColorByValue(&specular, (specular_value * specular_coeff));
 
@@ -1156,7 +1157,7 @@ Color pathtrace(Ray* ray, Scene* scene, Vector3* cam_loc, int depth){
     int intsec_result = scene_FindIntersections(scene, &curr_intsec);
     if(intsec_result){
         final_col = col_CreateCopy(&(curr_intsec.mat.albedo));
-
+        float mat_ref = sqrtf(curr_intsec.mat.reflectance);
         // Calculate Direct Light
         Light* light_list = scene->lights;
         col_Create(&direct_contrib, 0.0f, 0.0f, 0.0f);
@@ -1192,7 +1193,7 @@ Color pathtrace(Ray* ray, Scene* scene, Vector3* cam_loc, int depth){
             col_MulColorByValue(&incoming_color, (cos_theta / prob));
             col_AddColors(&indirect_contrib, &incoming_color);
         }
-        col_MulColorByValue(&indirect_contrib, 1.0f/((float)SAMPLES * PI));
+        col_MulColorByValue(&indirect_contrib, (mat_ref + 1.0f)/((float)SAMPLES * PI));
 
         // Mix the final contributions into the original albedo and return it.
         Color final_contrib;
@@ -1350,18 +1351,18 @@ int main(int argc, char* argv[]){
     Color gray;
     col_Create(&gray, 0.4f, 0.4f, 0.4f);
 
-    Material plane_mat;
-    mat_Create(&plane_mat, &light_pink, 0.8, 0.2, 0.05, 1.0f);
-    Material plane2_mat;
-    mat_Create(&plane2_mat, &light_blue, 0.2, 0.8, 0.05, 0.95f);
-    Material sphere1_mat;
-    mat_Create(&sphere1_mat, &gray, 0.2, 0.8, 0.05, 1.0f);
-    Material sphere2_mat;
-    mat_Create(&sphere2_mat, &blue, 0.2, 0.8, 0.05, 0.95f);
-    Material sphere3_mat;
-    mat_Create(&sphere3_mat, &green, 0.8, 0.2, 0.05, 0.3f);
-    Material sphere4_mat;
-    mat_Create(&sphere4_mat, &white, 0.8, 0.2, 0.05, 0.65f);
+    Material light_pink_mat;
+    mat_Create(&light_pink_mat, &light_pink, 0.8, 0.2, 0.05, 0.95f);
+    Material light_blue_mat;
+    mat_Create(&light_blue_mat, &light_blue, 0.5, 0.5, 0.05, 0.75f);
+    Material reflect_gray_mat;
+    mat_Create(&reflect_gray_mat, &gray, 0.2, 0.8, 0.05, 1.0f);
+    Material ornament_blue_mat;
+    mat_Create(&ornament_blue_mat, &blue, 0.2, 0.8, 0.05, 0.95f);
+    Material diffuse_green_mat;
+    mat_Create(&diffuse_green_mat, &green, 0.8, 0.2, 0.05, 0.3f);
+    Material white_mat;
+    mat_Create(&white_mat, &white, 0.8, 0.2, 0.05, 0.65f);
 
     Camera cam;
     Vector3 origin;
@@ -1383,32 +1384,38 @@ int main(int argc, char* argv[]){
     vec3_Create(&floor, 0.0f, 0.0f, 0.0f);
     vec3_Create(&wall_vec, -1.0f, 0.0f, 0.0f);
     vec3_Create(&wall_pos, 4.0f, 0.0f, 0.0f);
-    shape_CreatePlane(&plane, &plane_mat, &floor, &up);
-    shape_CreatePlane(&wall, &plane2_mat, &wall_pos, &wall_vec);
+    shape_CreatePlane(&plane, &reflect_gray_mat, &floor, &up);
+    shape_CreatePlane(&wall, &light_blue_mat, &wall_pos, &wall_vec);
     scene_AddShape(&scene, &plane);
     scene_AddShape(&scene, &wall);
     // Create a sphere
     Shape sphere;
-    shape_CreateSphere(&sphere, &sphere1_mat, &target, 1.0f);
+    shape_CreateSphere(&sphere, &reflect_gray_mat, &target, 1.0f);
     scene_AddShape(&scene, &sphere);
     // Create a 2nd sphere
     Shape sphere2;
     Vector3 sphere2_loc;
     vec3_Create(&sphere2_loc, 1.0f, 1.0f, 2.0f);
-    shape_CreateSphere(&sphere2, &sphere2_mat, &sphere2_loc, 0.75f);
+    shape_CreateSphere(&sphere2, &ornament_blue_mat, &sphere2_loc, 0.75f);
     scene_AddShape(&scene, &sphere2);
     // Create a 3rd sphere
     Shape sphere3;
     Vector3 sphere3_loc;
     vec3_Create(&sphere3_loc, 1.0f, 1.0f, -2.0f);
-    shape_CreateSphere(&sphere3, &sphere3_mat, &sphere3_loc, 0.5f);
+    shape_CreateSphere(&sphere3, &diffuse_green_mat, &sphere3_loc, 0.5f);
     scene_AddShape(&scene, &sphere3);
     // Create a 4th sphere
     Shape sphere4;
     Vector3 sphere4_loc;
     vec3_Create(&sphere4_loc, -2.0f, 2.0f, 0.0f);
-    shape_CreateSphere(&sphere4, &sphere4_mat, &sphere4_loc, 0.35f);
+    shape_CreateSphere(&sphere4, &white_mat, &sphere4_loc, 0.35f);
     scene_AddShape(&scene, &sphere4);
+    // Create a 5th sphere
+    Shape sphere5;
+    Vector3 sphere5_loc;
+    vec3_Create(&sphere5_loc, -1.5f, 2.0f, -1.0f);
+    shape_CreateSphere(&sphere5, &light_pink_mat, &sphere5_loc, 0.45f);
+    scene_AddShape(&scene, &sphere5);
     // Create two light sources
     Light light1;
     Vector3 light1_origin;

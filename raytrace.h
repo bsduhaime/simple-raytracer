@@ -10,7 +10,7 @@
 
 #define GAMMA 2.2
 #define EXPOSURE 1.0
-#define SAMPLES 4               // Number of samples taken for each light bounce's indirect light.
+#define SAMPLES 8               // Number of samples taken for each light bounce's indirect light.
 
 #define RAY_DIST_MIN 0.0001f    // Minimum range when a ray is considered self-intersecting.
 #define RAY_DIST_MAX 1.0e30f    // Maximum range when a ray is considered infinite.
