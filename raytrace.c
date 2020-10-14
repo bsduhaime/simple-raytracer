@@ -601,6 +601,12 @@ Shape shape_CreateCopy(Shape* shape){
     new_shape.plane_normal = vec3_CreateCopy(&(shape->plane_normal));
     new_shape.sphere_radius = shape->sphere_radius;
     new_shape.mat = mat_CreateCopy(&(shape->mat));
+
+    new_shape.mesh_size = shape->mesh_size;
+    new_shape.bounding_sphere_loc = vec3_CreateCopy(&(shape->bounding_sphere_loc));
+    new_shape.mesh_tris = shape->mesh_tris;     // Pass by reference or we'd starve memory...
+    //memcpy(new_shape.mesh_tris, shape->mesh_tris, sizeof(Triangle) * new_shape.mesh_size);
+
     return new_shape;
 }
 
@@ -618,29 +624,198 @@ int shape_CreateEmpty(Shape* shape){
 
     shape->plane_normal = empty_vec;
     shape->sphere_radius = 0.0f;
+
+    shape->mesh_size = 0;
+    shape->mesh_tris = NULL;
+    shape->bounding_sphere_loc = empty_vec;
+
     return 1;
 }
 
 int shape_CreatePlane(Shape* shape, Material* mat, Vector3* pos, Vector3* normal){
     shape->pos = vec3_CreateCopy(pos);
-    shape->mat = mat_CreateCopy(mat);
+    if(mat == NULL){
+        Color empty_col;
+        col_CreateGrayscale(&empty_col, 0.0f);
+        mat_Create(&(shape->mat), &empty_col, 0.0f, 0.0f, 0.0f, 0.0f);
+    } else {
+        shape->mat = mat_CreateCopy(mat);
+    }
     shape->plane_normal = vec3_CreateCopy(normal);
     shape->shape_type = PLANE;
 
     shape->sphere_radius = 0.0f;
+    shape->mesh_size = 0;
+    shape->mesh_tris = NULL;
     return 1;
 }
 
 int shape_CreateSphere(Shape* shape, Material* mat, Vector3* pos, float radius){
     shape->pos = vec3_CreateCopy(pos);
-    shape->mat = mat_CreateCopy(mat);
+    if(mat == NULL){
+        Color empty_col;
+        col_CreateGrayscale(&empty_col, 0.0f);
+        mat_Create(&(shape->mat), &empty_col, 0.0f, 0.0f, 0.0f, 0.0f);
+    } else {
+        shape->mat = mat_CreateCopy(mat);
+    }
     shape->sphere_radius = radius;
     shape->shape_type = SPHERE;
 
     Vector3 empty_vec;
     vec3_Create(&empty_vec, 0.0f, 0.0f, 0.0f);
     shape->plane_normal = empty_vec;
+    shape->mesh_size = 0;
+    shape->mesh_tris = NULL;
     return 1;
+}
+
+int shape_CreateTriangle(Triangle* tri, Vector3* v1, Vector3* v2, Vector3* v3){
+    tri->v1 = vec3_CreateCopy(v1);
+    tri->v2 = vec3_CreateCopy(v2);
+    tri->v3 = vec3_CreateCopy(v3);
+    Vector3 edge0 = vec3_CreateCopy(v2);
+    Vector3 edge1 = vec3_CreateCopy(v3);
+    vec3_SubVectors(&edge0, v1);
+    vec3_SubVectors(&edge1, v1);
+    tri->normal = vec3_CrossProduct(&edge0, &edge1);
+    vec3_Normalize(&(tri->normal));
+    return 1;
+}
+
+Triangle shape_CopyTriangle(Triangle* tri){
+    Triangle new_tri;
+    new_tri.v1 = vec3_CreateCopy(&(tri->v1));
+    new_tri.v2 = vec3_CreateCopy(&(tri->v2));
+    new_tri.v3 = vec3_CreateCopy(&(tri->v3));
+    new_tri.normal = vec3_CreateCopy(&(tri->normal));
+    return new_tri;
+}
+
+int shape_CreateMesh(Shape* shape, Material* mat, Vector3* pos, const char* obj_file, float scale, Vector3* rot_angles){
+    shape->pos = vec3_CreateCopy(pos);
+    if(mat == NULL){
+        Color empty_col;
+        col_CreateGrayscale(&empty_col, 0.0f);
+        mat_Create(&(shape->mat), &empty_col, 0.0f, 0.0f, 0.0f, 0.0f);
+    } else {
+        shape->mat = mat_CreateCopy(mat);
+    }
+    shape->shape_type = MESH;
+    
+    // Load the mesh file
+    FILE* f = fopen(obj_file, "r");
+    if(f == NULL){
+        printf("Error opening the file: %s\n", obj_file);
+        return 0;
+    }
+    // Count number of vertices and faces first
+    int vert_count = 0;
+    int face_count = 0;
+    while(1){   // Read until we hit EOF
+        char curr_line[128];
+        int result = fscanf(f, "%s", curr_line);
+        if(result == EOF){
+            break;
+        }
+        if(strcmp(curr_line, "v") == 0){
+            vert_count++;
+        }
+        if(strcmp(curr_line, "f") == 0){
+            face_count++;
+        }
+    }
+    Vector3* verts = malloc(sizeof(Vector3) * vert_count);
+    shape->mesh_tris = malloc(sizeof(Triangle) * face_count);
+    shape->mesh_size = face_count;
+    float vert_count_inv = 1.0f;
+    if(vert_count > 0.0f){
+        vert_count_inv = 1.0f / vert_count;
+    }
+    vec3_Create(&(shape->bounding_sphere_loc), 0.0f, 0.0f, 0.0f);
+    // Rewind and read in the data
+    rewind(f);
+    int latest_vert = 0;
+    int latest_face = 0;
+    Vector3 basis_x, basis_y, basis_z;
+    vec3_Create(&basis_x, 1.0f, 0.0f, 0.0f);
+    vec3_Create(&basis_y, 0.0f, 1.0f, 0.0f);
+    vec3_Create(&basis_z, 0.0f, 0.0f, 1.0f);
+    while(1){
+        char curr_line[128];
+        int result = fscanf(f, "%s", curr_line);
+        if(result == EOF){
+            break;
+        }
+        if(strcmp(curr_line, "v") == 0){
+            if(latest_vert < vert_count){
+                float x, y, z;
+                Vector3 vert;
+                fscanf(f, " %f %f %f\n", &x, &y, &z);
+                // Scale, rotate and translate this vert.
+                vec3_Create(&vert, x * scale, y * scale, z * scale);
+                vert = vec3_Rotate(&basis_z, &vert, rot_angles->z);
+                vert = vec3_Rotate(&basis_y, &vert, rot_angles->y);
+                vert = vec3_Rotate(&basis_x, &vert, rot_angles->x);
+                vec3_AddVectors(&vert, pos);
+                verts[latest_vert] = vec3_CreateCopy(&vert);
+                latest_vert++;
+                // Calculate the average location
+                vec3_MulVector(&vert, vert_count_inv);
+                vec3_AddVectors(&(shape->bounding_sphere_loc), &vert);
+            }
+        }
+        if(strcmp(curr_line, "f") == 0){
+            if(latest_face < face_count){
+                int v1, v2, v3;
+                fscanf(f, " %d %d %d\n", &v1, &v2, &v3);
+                Triangle face;
+                shape_CreateTriangle(&face, &(verts[v1-1]), &(verts[v2-1]), &(verts[v3-1]));
+                (shape->mesh_tris)[latest_face] = shape_CopyTriangle(&face);
+                latest_face++;
+            }
+        }
+    }
+    // Find out the furthest distance from a vert
+    float furthest_dist = 0.0f;
+    for(int v = 0; v < vert_count; v++){
+        Vector3 vert = verts[v];
+        float curr_dist = vec3_LengthSquared(&vert);
+        if(curr_dist > furthest_dist){
+            furthest_dist = curr_dist;
+        }
+    }
+    shape->sphere_radius = sqrtf(furthest_dist);
+
+    // Cleanup
+    free(verts);
+    fclose(f);
+
+    // Fill in empty data for irrelevant data.
+    //shape->sphere_radius = 0.0f;
+    Vector3 empty_vec;
+    vec3_Create(&empty_vec, 0.0f, 0.0f, 0.0f);
+    shape->plane_normal = empty_vec;
+    return 1;
+}
+
+int shape_FindIntersection(Shape* shape, Intersection* result_intsec){
+    int result = 0;
+    switch(shape->shape_type){
+        case PLANE: 
+            result = shape_FindPlaneIntersection(shape, result_intsec);
+            break;
+        case SPHERE: 
+            result = shape_FindSphereIntersection(shape, result_intsec);
+            break;
+        case MESH:
+            result = shape_FindMeshIntersection(shape, result_intsec);
+            break;
+        case EMPTY:
+            printf("WARNING: Empty shape!\n");
+            return 0;
+    }
+    return result;
 }
 
 int shape_FindPlaneIntersection(Shape* plane, Intersection* result_intsec){
@@ -690,18 +865,66 @@ int shape_FindSphereIntersection(Shape* sphere, Intersection* result_intsec){
     return 1;
 }
 
-int shape_FindIntersection(Shape* shape, Intersection* result_intsec){
+int shape_FindTriangleIntersection(Triangle* tri, Shape* mesh, Intersection* result_intsec){
+    // Implemented using Moller-Trumbore
+    Vector3 intsec_dir = (*result_intsec).ray.dir;
+    Vector3 intsec_origin = (*result_intsec).ray.origin;
+    Vector3 v1v2 = vec3_CreateCopy(&(tri->v2));
+    Vector3 v1v3 = vec3_CreateCopy(&(tri->v3));
+    vec3_SubVectors(&v1v2, &(tri->v1));
+    vec3_SubVectors(&v1v3, &(tri->v1));
+    Vector3 pvec = vec3_CrossProduct(&intsec_dir, &v1v3);
+
+    float det = vec3_DotProduct(&v1v2, &pvec);
+    if(det <= 0.0f){
+        return 0;
+    }
+
+    float inv_det = 1.0f / det;
+    Vector3 tvec = vec3_CreateCopy(&intsec_origin);
+    vec3_SubVectors(&tvec, &(tri->v1));
+    float u = vec3_DotProduct(&tvec, &pvec) * inv_det;
+    if(u < 0.0f || u > 1.0f){
+        return 0;
+    }
+
+    Vector3 qvec = vec3_CrossProduct(&tvec, &v1v2);
+    float v = vec3_DotProduct(&intsec_dir, &qvec) * inv_det;
+    if(v < 0.0f || (u + v) > 1.0f){
+        return 0;
+    }
+
+    float t = vec3_DotProduct(&v1v3, &qvec) * inv_det;
+    if(t <= RAY_DIST_MIN || t >= result_intsec->t){     // Outside of range?
+        return 0;
+    }
+    result_intsec->t = t;
+    result_intsec->shape = shape_CreateCopy(mesh);
+    result_intsec->mat = mesh->mat;
+    return 1;
+}
+
+int shape_FindMeshIntersection(Shape* shape, Intersection* result_intsec){
     int result = 0;
-    switch(shape->shape_type){
-        case PLANE: 
-            result = shape_FindPlaneIntersection(shape, result_intsec);
-            break;
-        case SPHERE: 
-            result = shape_FindSphereIntersection(shape, result_intsec);
-            break;
-        case EMPTY:
-            printf("WARNING: Empty shape!\n");
+    Shape bounding_sphere;
+    shape_CreateSphere(&bounding_sphere, NULL, &(shape->bounding_sphere_loc), shape->sphere_radius);
+    int in_bounding_sphere = shape_DoesSphereIntersect(&bounding_sphere, &(result_intsec->ray));
+    if(!in_bounding_sphere){
+        // Make sure the ray isn't fully contained in the sphere...
+        Vector3 ray_orig_len = vec3_CreateCopy(&((*result_intsec).ray.origin));
+        vec3_SubVectors(&ray_orig_len, &(shape->bounding_sphere_loc));
+        float orig_len = vec3_Length(&ray_orig_len);
+        if(orig_len > shape->sphere_radius){
             return 0;
+        }
+    }
+    for(int t = 0; t < shape->mesh_size; t++){
+        Triangle curr_tri = (shape->mesh_tris)[t];
+        int was_hit = shape_FindTriangleIntersection(&curr_tri, shape, result_intsec);
+        if(was_hit){
+            result_intsec->tri_idx = t;
+            result = 1;
+        }
     }
     return result;
 }
@@ -714,6 +937,9 @@ int shape_DoesIntersect(Shape* shape, Ray* ray){
             break;
         case SPHERE: 
             result = shape_DoesSphereIntersect(shape, ray);
+            break;
+        case MESH:
+            result = shape_DoesMeshIntersect(shape, ray);
             break;
         case EMPTY:
             printf("WARNING: Empty shape!\n");
@@ -761,6 +987,65 @@ int shape_DoesSphereIntersect(Shape* sphere, Ray* ray){
     } else {
         return 0;
     }
+}
+
+int shape_DoesTriangleIntersect(Triangle* tri, Ray* ray){
+    Vector3 ray_dir = ray->dir;
+    Vector3 ray_origin = ray->origin;
+    Vector3 v1v2 = vec3_CreateCopy(&(tri->v2));
+    Vector3 v1v3 = vec3_CreateCopy(&(tri->v3));
+    vec3_SubVectors(&v1v2, &(tri->v1));
+    vec3_SubVectors(&v1v3, &(tri->v1));
+    Vector3 pvec = vec3_CrossProduct(&ray_dir, &v1v3);
+
+    float det = vec3_DotProduct(&v1v2, &pvec);
+    if(det <= 0.0f){
+        return 0;
+    }
+
+    float inv_det = 1.0f / det;
+    Vector3 tvec = vec3_CreateCopy(&ray_origin);
+    vec3_SubVectors(&tvec, &(tri->v1));
+    float u = vec3_DotProduct(&tvec, &pvec) * inv_det;
+    if(u < 0.0f || u > 1.0f){
+        return 0;
+    }
+
+    Vector3 qvec = vec3_CrossProduct(&tvec, &v1v2);
+    float v = vec3_DotProduct(&ray_dir, &qvec) * inv_det;
+    if(v < 0.0f || (u + v) > 1.0f){
+        return 0;
+    }
+
+    float t = vec3_DotProduct(&v1v3, &qvec) * inv_det;
+    if(t <= RAY_DIST_MIN || t >= ray->t_max){     // Outside of range?
+        return 0;
+    }
+
+    return 1;
+}
+
+int shape_DoesMeshIntersect(Shape* shape, Ray* ray){
+    Shape bounding_sphere;
+    shape_CreateSphere(&bounding_sphere, NULL, &(shape->bounding_sphere_loc), shape->sphere_radius);
+    int in_bounding_sphere = shape_DoesSphereIntersect(&bounding_sphere, ray);
+    if(!in_bounding_sphere){
+        // Make sure the ray isn't fully contained in the sphere...
+        Vector3 ray_orig_len = vec3_CreateCopy(&(ray->origin));
+        vec3_SubVectors(&ray_orig_len, &(shape->bounding_sphere_loc));
+        float orig_len = vec3_Length(&ray_orig_len);
+        if(orig_len > shape->sphere_radius){
+            return 0;
+        }
+    }
+    for(int t = 0; t < shape->mesh_size; t++){
+        Triangle curr_tri = (shape->mesh_tris)[t];
+        int was_hit = shape_DoesTriangleIntersect(&curr_tri, ray);
+        if(was_hit){
+            return 1;
+        }
+    }
+    return 0;
 }
 
 //
@@ -841,6 +1126,14 @@ int scene_HasShadowIntersection(Scene* scene, Light* light, Intersection* source
     return scene_HasIntersection(scene, &shadow_ray);
 }
 
+int scene_Cleanup(Scene* scene){
+    for(int s = 0; s < scene->set_shapes_size; s++){
+        Shape curr_shape = (scene->shapes)[s];
+        free(curr_shape.mesh_tris);
+    }
+    return 1;
+}
+
 //
 // INTERSECTIONS
 //
@@ -848,6 +1141,7 @@ int scene_HasShadowIntersection(Scene* scene, Light* light, Intersection* source
 int intsec_Create(Intersection* new_intsec, Ray* ray){
     new_intsec->ray = ray_CreateCopy(ray);
     new_intsec->t = ray->t_max;
+    new_intsec->tri_idx = -1;
     Shape empty;
     shape_CreateEmpty(&empty);
     new_intsec->shape = empty;
@@ -860,6 +1154,7 @@ Intersection intsec_CreateCopy(Intersection* intsec){
     new_intsec.shape = intsec->shape;
     new_intsec.t = intsec->t;
     new_intsec.mat = intsec->mat;
+    new_intsec.tri_idx = intsec->tri_idx;
     return new_intsec;
 }
 
@@ -884,6 +1179,15 @@ Vector3 intsec_GetIntersectNormal(Intersection* intsec){
             normal = vec3_CreateCopy(&intsec_point);
             vec3_SubVectors(&normal, &(intsec_shape.pos));
             vec3_Normalize(&normal);
+            break;
+        case MESH:
+            if(intsec->tri_idx >= 0 && intsec->tri_idx < intsec_shape.mesh_size){
+                Triangle hit_tri = intsec_shape.mesh_tris[intsec->tri_idx];
+                normal = vec3_CreateCopy(&(hit_tri.normal));
+            } else {
+                printf("WARNING: invalid triangle index!");
+                vec3_Create(&normal, 0.0f, 1.0f, 0.0f);
+            }
             break;
         case EMPTY:
             printf(" WARNING: Empty shape!");
@@ -1325,7 +1629,7 @@ int raytrace_multithreading(Image* img_dest, Camera* cam, Scene* scene){
     return 1;
 }
 
-int main(int argc, char* argv[]){
+int main(){
     int img_width = 800;
     int img_height = 600;
     float asp_ratio = (float)img_width / (float)img_height;
@@ -1384,49 +1688,49 @@ int main(int argc, char* argv[]){
     vec3_Create(&floor, 0.0f, 0.0f, 0.0f);
     vec3_Create(&wall_vec, -1.0f, 0.0f, 0.0f);
     vec3_Create(&wall_pos, 4.0f, 0.0f, 0.0f);
-    shape_CreatePlane(&plane, &reflect_gray_mat, &floor, &up);
-    shape_CreatePlane(&wall, &light_blue_mat, &wall_pos, &wall_vec);
+    shape_CreatePlane(&plane, &ornament_blue_mat, &floor, &up);
+    shape_CreatePlane(&wall, &white_mat, &wall_pos, &wall_vec);
     scene_AddShape(&scene, &plane);
     scene_AddShape(&scene, &wall);
-    // Create a sphere
-    Shape sphere;
-    shape_CreateSphere(&sphere, &reflect_gray_mat, &target, 1.0f);
-    scene_AddShape(&scene, &sphere);
-    // Create a 2nd sphere
-    Shape sphere2;
-    Vector3 sphere2_loc;
-    vec3_Create(&sphere2_loc, 1.0f, 1.0f, 2.0f);
-    shape_CreateSphere(&sphere2, &ornament_blue_mat, &sphere2_loc, 0.75f);
-    scene_AddShape(&scene, &sphere2);
-    // Create a 3rd sphere
-    Shape sphere3;
-    Vector3 sphere3_loc;
-    vec3_Create(&sphere3_loc, 1.0f, 1.0f, -2.0f);
-    shape_CreateSphere(&sphere3, &diffuse_green_mat, &sphere3_loc, 0.5f);
-    scene_AddShape(&scene, &sphere3);
-    // Create a 4th sphere
-    Shape sphere4;
-    Vector3 sphere4_loc;
-    vec3_Create(&sphere4_loc, -2.0f, 2.0f, 0.0f);
-    shape_CreateSphere(&sphere4, &white_mat, &sphere4_loc, 0.35f);
-    scene_AddShape(&scene, &sphere4);
-    // Create a 5th sphere
-    Shape sphere5;
-    Vector3 sphere5_loc;
-    vec3_Create(&sphere5_loc, -1.5f, 2.0f, -1.0f);
-    shape_CreateSphere(&sphere5, &light_pink_mat, &sphere5_loc, 0.45f);
-    scene_AddShape(&scene, &sphere5);
+
     // Create two light sources
     Light light1;
     Vector3 light1_origin;
-    vec3_Create(&light1_origin, -4.0f, 3.0f, -4.0f);
-    light_Create(&light1, &light1_origin, &white, 15.0f);
+    vec3_Create(&light1_origin, 1.5f, 1.0f, -3.0f);
+    light_Create(&light1, &light1_origin, &light_pink, 15.0f);
     scene_AddLight(&scene, &light1);
     Light light2;
     Vector3 light2_origin;
-    vec3_Create(&light2_origin, -4.0f, 3.0f, 2.0f);
-    light_Create(&light2, &light2_origin, &white, 15.0f);
+    vec3_Create(&light2_origin, 1.0f, 2.0f, 2.0f);
+    light_Create(&light2, &light2_origin, &light_blue, 15.0f);
     scene_AddLight(&scene, &light2);
+    Light light3;
+    Vector3 light3_origin;
+    vec3_Create(&light3_origin, -2.0f, 2.0f, 0.0f);
+    light_Create(&light3, &light3_origin, &white, 5.0f);
+    scene_AddLight(&scene, &light3);
+
+    // Create a mesh
+    Shape mesh;
+    Vector3 mesh_loc;
+    Vector3 mesh_rot;
+    vec3_Create(&mesh_loc, 0.0f, 1.25f, 0.0f);
+    vec3_Create(&mesh_rot, 0.0f, 5.0f*PI/4, -PI/16);
+    char obj_file[] = "cow.obj";
+    shape_CreateMesh(&mesh, &diffuse_green_mat, &mesh_loc, obj_file, 0.35f, &mesh_rot);
+    scene_AddShape(&scene, &mesh);
+    // Create a sphere
+    Shape sphere;
+    Vector3 sphere_loc;
+    vec3_Create(&sphere_loc, 3.0f, 3.0f, -2.5f);
+    shape_CreateSphere(&sphere, &reflect_gray_mat, &sphere_loc, 0.65f);
+    scene_AddShape(&scene, &sphere);
+    // Create a sphere
+    Shape sphere2;
+    Vector3 sphere2_loc;
+    vec3_Create(&sphere2_loc, 3.0f, 3.0f, 2.5f);
+    shape_CreateSphere(&sphere2, &light_pink_mat, &sphere2_loc, 0.85f);
+    scene_AddShape(&scene, &sphere2);
 
     printf("Raytracing.\n");
     raytrace_multithreading(&final_img, &cam, &scene);
@@ -1435,4 +1739,5 @@ int main(int argc, char* argv[]){
     char final_dir[] = "ray_result.ppm";
     img_SaveImage(&final_img, final_dir);
     img_Destroy(&final_img);
+    scene_Cleanup(&scene);
 }

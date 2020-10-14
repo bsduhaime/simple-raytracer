@@ -10,7 +10,7 @@
 
 #define GAMMA 2.2
 #define EXPOSURE 1.0
-#define SAMPLES 8               // Number of samples taken for each light bounce's indirect light.
+#define SAMPLES 4               // Number of samples taken for each light bounce's indirect light.
 
 #define RAY_DIST_MIN 0.0001f    // Minimum range when a ray is considered self-intersecting.
 #define RAY_DIST_MAX 1.0e30f    // Maximum range when a ray is considered infinite.
@@ -150,8 +150,14 @@ Vector3 ray_GetPointOnRay(Ray* ray, float t);
 enum ShapeTypes{
     EMPTY,
     PLANE,
-    SPHERE
+    SPHERE,
+    MESH
 };
+
+typedef struct Triangle{
+    Vector3 v1, v2, v3;
+    Vector3 normal;
+} Triangle;
 
 typedef struct Shape{
     enum ShapeTypes shape_type;
@@ -159,14 +165,18 @@ typedef struct Shape{
     Vector3 pos;
     Material mat;
     // Shape specific variables
-    Vector3 plane_normal;
-    float sphere_radius;
+    Vector3 plane_normal;           // plane
+    float sphere_radius;            // sphere and mesh bounding sphere
+    Triangle* mesh_tris;            // mesh
+    int mesh_size;                  // mesh
+    Vector3 bounding_sphere_loc;    // mesh
 } Shape;
 
 typedef struct Intersection{
     Ray ray;
     float t;
     Shape shape;
+    int tri_idx;
     Material mat;
 } Intersection;
 
@@ -174,14 +184,21 @@ Shape shape_CreateCopy(Shape* shape);
 int shape_CreateEmpty(Shape* shape);
 int shape_CreatePlane(Shape* shape, Material* mat, Vector3* pos, Vector3* normal);
 int shape_CreateSphere(Shape* shape, Material* mat, Vector3* pos, float radius);
+int shape_CreateTriangle(Triangle* tri, Vector3* v1, Vector3* v2, Vector3* v3);
+Triangle shape_CopyTriangle(Triangle* tri);
+int shape_CreateMesh(Shape* shape, Material* mat, Vector3* pos, const char* obj_file, float scale, Vector3* rot_angles);
 
 int shape_FindIntersection(Shape* shape, Intersection* result_intsec);
 int shape_FindPlaneIntersection(Shape* plane, Intersection* result_intsec);
 int shape_FindSphereIntersection(Shape* sphere, Intersection* result_intsec);
+int shape_FindTriangleIntersection(Triangle* tri, Shape* mesh, Intersection* result_intsec);
+int shape_FindMeshIntersection(Shape* shape, Intersection* result_intsec);
 
 int shape_DoesIntersect(Shape* shape, Ray* ray);
 int shape_DoesPlaneIntersect(Shape* plane, Ray* ray);
 int shape_DoesSphereIntersect(Shape* sphere, Ray* ray);
+int shape_DoesTriangleIntersect(Triangle* tri, Ray* ray);
+int shape_DoesMeshIntersect(Shape* shape, Ray* ray);
 
 int intsec_Create(Intersection* new_intsec, Ray* ray);
 Intersection intsec_CreateCopy(Intersection* intsec);
@@ -245,6 +262,8 @@ int scene_FindIntersections(Scene* scene, Intersection* result_intsec);
 int scene_HasIntersection(Scene* scene, Ray* ray);
 
 int scene_HasShadowIntersection(Scene* scene, Light* light, Intersection* source);
+
+int scene_Cleanup(Scene* scene);
 
 //
 // IMAGE (PPM Format)
