@@ -19,6 +19,8 @@
 #define SHAPE_MAX 16            // Maximum number of shapes allowed in a scene.
 #define LIGHT_MAX 16            // Maximum number of lights allowed in a scene.
 
+#define DEFAULT_SMOOTH_SHADING 1    // 0 for disabled, any number for enabled. Overwrites any normal data supplied by the .obj file!
+
 //
 // VECTOR3
 //
@@ -156,7 +158,7 @@ enum ShapeTypes{
 
 typedef struct Triangle{
     Vector3 v1, v2, v3;
-    Vector3 normal;
+    Vector3 vn1, vn2, vn3;
 } Triangle;
 
 typedef struct Shape{
@@ -176,15 +178,17 @@ typedef struct Intersection{
     Ray ray;
     float t;
     Shape shape;
-    int tri_idx;
     Material mat;
+    // Mesh specific information
+    int tri_idx;
+    Vector2 bay_coords;
 } Intersection;
 
 Shape shape_CreateCopy(Shape* shape);
 int shape_CreateEmpty(Shape* shape);
 int shape_CreatePlane(Shape* shape, Material* mat, Vector3* pos, Vector3* normal);
 int shape_CreateSphere(Shape* shape, Material* mat, Vector3* pos, float radius);
-int shape_CreateTriangle(Triangle* tri, Vector3* v1, Vector3* v2, Vector3* v3);
+int shape_CreateTriangle(Triangle* tri, Vector3* v1, Vector3* v2, Vector3* v3, Vector3* vn1, Vector3* vn2, Vector3* vn3);
 Triangle shape_CopyTriangle(Triangle* tri);
 int shape_CreateMesh(Shape* shape, Material* mat, Vector3* pos, const char* obj_file, float scale, Vector3* rot_angles);
 
@@ -199,6 +203,8 @@ int shape_DoesPlaneIntersect(Shape* plane, Ray* ray);
 int shape_DoesSphereIntersect(Shape* sphere, Ray* ray);
 int shape_DoesTriangleIntersect(Triangle* tri, Ray* ray);
 int shape_DoesMeshIntersect(Shape* shape, Ray* ray);
+
+Vector3 shape_InterpolateTriangleNormal(Triangle* tri, Intersection* intsec);
 
 int intsec_Create(Intersection* new_intsec, Ray* ray);
 Intersection intsec_CreateCopy(Intersection* intsec);

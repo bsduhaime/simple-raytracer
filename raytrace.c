@@ -605,7 +605,6 @@ Shape shape_CreateCopy(Shape* shape){
     new_shape.mesh_size = shape->mesh_size;
     new_shape.bounding_sphere_loc = vec3_CreateCopy(&(shape->bounding_sphere_loc));
     new_shape.mesh_tris = shape->mesh_tris;     // Pass by reference or we'd starve memory...
-    //memcpy(new_shape.mesh_tris, shape->mesh_tris, sizeof(Triangle) * new_shape.mesh_size);
 
     return new_shape;
 }
@@ -670,7 +669,7 @@ int shape_CreateSphere(Shape* shape, Material* mat, Vector3* pos, float radius){
     return 1;
 }
 
-int shape_CreateTriangle(Triangle* tri, Vector3* v1, Vector3* v2, Vector3* v3){
+int shape_CreateTriangle(Triangle* tri, Vector3* v1, Vector3* v2, Vector3* v3, Vector3* vn1, Vector3* vn2, Vector3* vn3){
     tri->v1 = vec3_CreateCopy(v1);
     tri->v2 = vec3_CreateCopy(v2);
     tri->v3 = vec3_CreateCopy(v3);
@@ -678,8 +677,28 @@ int shape_CreateTriangle(Triangle* tri, Vector3* v1, Vector3* v2, Vector3* v3){
     Vector3 edge1 = vec3_CreateCopy(v3);
     vec3_SubVectors(&edge0, v1);
     vec3_SubVectors(&edge1, v1);
-    tri->normal = vec3_CrossProduct(&edge0, &edge1);
-    vec3_Normalize(&(tri->normal));
+
+    // Create appropriate normals
+    Vector3 def_normal = vec3_CrossProduct(&edge0, &edge1);
+    vec3_Normalize(&def_normal);
+    // Normal for vert 1
+    if(vn1 != NULL){
+        tri->vn1 = vec3_CreateCopy(vn1);
+    } else {
+        tri->vn1 = vec3_CreateCopy(&def_normal);
+    }
+    // Normal for vert 2
+    if(vn2 != NULL){
+        tri->vn2 = vec3_CreateCopy(vn2);
+    } else {
+        tri->vn2 = vec3_CreateCopy(&def_normal);
+    }
+    // Normal for vert 3
+    if(vn3 != NULL){
+        tri->vn3 = vec3_CreateCopy(vn3);
+    } else {
+        tri->vn3 = vec3_CreateCopy(&def_normal);
+    }
     return 1;
 }
 
@@ -688,7 +707,9 @@ Triangle shape_CopyTriangle(Triangle* tri){
     new_tri.v1 = vec3_CreateCopy(&(tri->v1));
     new_tri.v2 = vec3_CreateCopy(&(tri->v2));
     new_tri.v3 = vec3_CreateCopy(&(tri->v3));
-    new_tri.normal = vec3_CreateCopy(&(tri->normal));
+    new_tri.vn1 = vec3_CreateCopy(&(tri->vn1));
+    new_tri.vn2 = vec3_CreateCopy(&(tri->vn2));
+    new_tri.vn3 = vec3_CreateCopy(&(tri->vn3));
     return new_tri;
 }
 
@@ -711,6 +732,7 @@ int shape_CreateMesh(Shape* shape, Material* mat, Vector3* pos, const char* obj_
     }
     // Count number of vertices and faces first
     int vert_count = 0;
+    int vert_normal_count = 0;
     int face_count = 0;
     while(1){   // Read until we hit EOF
         char curr_line[128];
@@ -724,30 +746,44 @@ int shape_CreateMesh(Shape* shape, Material* mat, Vector3* pos, const char* obj_
         if(strcmp(curr_line, "f") == 0){
             face_count++;
         }
+        if(strcmp(curr_line, "vn") == 0){
+            vert_normal_count++;
+        }
     }
+    // Allocate rooms for our data
     Vector3* verts = malloc(sizeof(Vector3) * vert_count);
+    Vector3* norm_verts;
+    if(DEFAULT_SMOOTH_SHADING){
+        norm_verts = calloc(vert_count, sizeof(Vector3));
+    } else {
+        norm_verts = malloc(sizeof(Vector3) * vert_normal_count);
+    }
     shape->mesh_tris = malloc(sizeof(Triangle) * face_count);
     shape->mesh_size = face_count;
     float vert_count_inv = 1.0f;
-    if(vert_count > 0.0f){
-        vert_count_inv = 1.0f / vert_count;
+    if(vert_count > 0){
+        vert_count_inv = 1.0f / (float)vert_count;
     }
     vec3_Create(&(shape->bounding_sphere_loc), 0.0f, 0.0f, 0.0f);
-    // Rewind and read in the data
+
+    // Rewind and read in the vert, normal, and face data.
+    // We don't save it yet since we might need to accumulate face normals for smooth shading.
     rewind(f);
     int latest_vert = 0;
+    int latest_norm_vert = 0;
     int latest_face = 0;
     Vector3 basis_x, basis_y, basis_z;
     vec3_Create(&basis_x, 1.0f, 0.0f, 0.0f);
     vec3_Create(&basis_y, 0.0f, 1.0f, 0.0f);
     vec3_Create(&basis_z, 0.0f, 0.0f, 1.0f);
+    // Loop through file until we reach EOF
     while(1){
         char curr_line[128];
         int result = fscanf(f, "%s", curr_line);
         if(result == EOF){
             break;
         }
-        if(strcmp(curr_line, "v") == 0){
+        if(strcmp(curr_line, "v") == 0){    // Save vertex data
             if(latest_vert < vert_count){
                 float x, y, z;
                 Vector3 vert;
@@ -765,18 +801,134 @@ int shape_CreateMesh(Shape* shape, Material* mat, Vector3* pos, const char* obj_
                 vec3_AddVectors(&(shape->bounding_sphere_loc), &vert);
             }
         }
-        if(strcmp(curr_line, "f") == 0){
+        if(strcmp(curr_line, "vn") == 0 && !DEFAULT_SMOOTH_SHADING){   // Save normal data
+            if(latest_norm_vert < vert_normal_count){
+                float x, y, z;
+                Vector3 norm;
+                fscanf(f, " %f %f %f\n", &x, &y, &z);
+                // Rotate and normalize this normal
+                vec3_Create(&norm, x, y, z);
+                norm = vec3_Rotate(&basis_z, &norm, rot_angles->z);
+                norm = vec3_Rotate(&basis_y, &norm, rot_angles->y);
+                norm = vec3_Rotate(&basis_x, &norm, rot_angles->x);
+                //vec3_AddVectors(&norm, pos);
+                vec3_Normalize(&norm);
+                norm_verts[latest_norm_vert] = vec3_CreateCopy(&norm);
+                latest_norm_vert++;
+            }
+        }
+        if(strcmp(curr_line, "f") == 0 && DEFAULT_SMOOTH_SHADING){    // Calculate vert normals if using smooth shading.
             if(latest_face < face_count){
-                int v1, v2, v3;
-                fscanf(f, " %d %d %d\n", &v1, &v2, &v3);
+                char* token;
+                int v[3] = {-1, -1, -1};
+                //int vn[3] = {-1, -1, -1};
+                //int vt[3] = {-1, -1, -1};
+                for(int c = 0; c < 3; c++){
+                    char face_data[64];
+                    fscanf(f, " %s", face_data);
+                    char* data_copy;
+                    char* to_free = data_copy = strdup(face_data);
+                    int data_type = 0;
+                    while((token = strsep(&data_copy, "/"))){
+                        int idx = -1;
+                        if(strcmp(token, "") != 0){
+                            idx = atoi(token);   
+                        }
+                        switch(data_type){
+                            case 0: v[c] = idx; break;
+                            case 1: break;
+                            case 2: break;
+                        }
+                        data_type++;
+                    }
+                    free(to_free);
+                }
+                Vector3 v1 = vec3_CreateCopy(&(verts[v[0]-1]));
+                Vector3 v2 = vec3_CreateCopy(&(verts[v[1]-1]));
+                Vector3 v3 = vec3_CreateCopy(&(verts[v[2]-1]));
+                Vector3 edge0 = vec3_CreateCopy(&v2);
+                Vector3 edge1 = vec3_CreateCopy(&v3);
+                vec3_SubVectors(&edge0, &v1);
+                vec3_SubVectors(&edge1, &v1);
+                Vector3 cross_prod = vec3_CrossProduct(&edge0, &edge1);
+
+                // Accumulate normal from this face into each vert normal
+                vec3_AddVectors(&(norm_verts[v[0]-1]), &cross_prod);
+                vec3_AddVectors(&(norm_verts[v[1]-1]), &cross_prod);
+                vec3_AddVectors(&(norm_verts[v[2]-1]), &cross_prod);
+                latest_face++;
+            }
+        }
+    }
+
+    // Finally, reread the file and store the face data for good.
+    rewind(f);
+    latest_face = 0;
+    while(1){
+        char curr_line[128];
+        int result = fscanf(f, "%s", curr_line);
+        if(result == EOF){
+            break;
+        }
+        if(strcmp(curr_line, "f") == 0){    // Calculate and save the triangle defined by face data
+            if(latest_face < face_count){
+                char* token;
+                int v[3] = {-1, -1, -1};
+                int vn[3] = {-1, -1, -1};
+                //int vt[3] = {-1, -1, -1};
+                for(int c = 0; c < 3; c++){
+                    char face_data[64];
+                    fscanf(f, " %s", face_data);
+                    char* data_copy;
+                    char* to_free = data_copy = strdup(face_data);
+                    int data_type = 0;
+                    while((token = strsep(&data_copy, "/"))){
+                        int idx = -1;
+                        if(strcmp(token, "") != 0){
+                            idx = atoi(token);   
+                        }
+                        switch(data_type){
+                            case 0: v[c] = idx; break;
+                            case 1: break;
+                            case 2: vn[c] = idx; break;
+                        }
+                        data_type++;
+                    }
+                    free(to_free);
+                }
+                if(DEFAULT_SMOOTH_SHADING){     // convert our normal indices to vertex indices
+                    vn[0] = v[0];
+                    vec3_Normalize(&(norm_verts[vn[0]-1]));
+                    vn[1] = v[1];
+                    vec3_Normalize(&(norm_verts[vn[1]-1]));
+                    vn[2] = v[2];
+                    vec3_Normalize(&(norm_verts[vn[2]-1]));
+                }
+                Vector3 *vn1_p, *vn2_p, *vn3_p;
+                if(vn[0] > 0){
+                    vn1_p = &(norm_verts[vn[0]-1]);
+                } else {
+                    vn1_p = (Vector3*)NULL;
+                }
+                if(vn[1] > 0){
+                    vn2_p = &(norm_verts[vn[1]-1]);
+                } else {
+                    vn2_p = (Vector3*)NULL;
+                }
+                if(vn[2] > 0){
+                    vn3_p = &(norm_verts[vn[2]-1]);
+                } else {
+                    vn3_p = (Vector3*)NULL;
+                }
                 Triangle face;
-                shape_CreateTriangle(&face, &(verts[v1-1]), &(verts[v2-1]), &(verts[v3-1]));
+                shape_CreateTriangle(&face, &(verts[v[0]-1]), &(verts[v[1]-1]), &(verts[v[2]-1]), vn1_p, vn2_p, vn3_p);
                 (shape->mesh_tris)[latest_face] = shape_CopyTriangle(&face);
                 latest_face++;
             }
         }
     }
-    // Find out the furthest distance from a vert
+
+    // Find out the furthest distance from a vert to create bounding sphere
     float furthest_dist = 0.0f;
     for(int v = 0; v < vert_count; v++){
         Vector3 vert = verts[v];
@@ -789,10 +941,10 @@ int shape_CreateMesh(Shape* shape, Material* mat, Vector3* pos, const char* obj_
 
     // Cleanup
     free(verts);
+    free(norm_verts);
     fclose(f);
 
     // Fill in empty data for irrelevant data.
-    //shape->sphere_radius = 0.0f;
     Vector3 empty_vec;
     vec3_Create(&empty_vec, 0.0f, 0.0f, 0.0f);
     shape->plane_normal = empty_vec;
@@ -898,7 +1050,9 @@ int shape_FindTriangleIntersection(Triangle* tri, Shape* mesh, Intersection* res
     if(t <= RAY_DIST_MIN || t >= result_intsec->t){     // Outside of range?
         return 0;
     }
+
     result_intsec->t = t;
+    vec2_Create(&(result_intsec->bay_coords), u, v);
     result_intsec->shape = shape_CreateCopy(mesh);
     result_intsec->mat = mesh->mat;
     return 1;
@@ -1048,6 +1202,23 @@ int shape_DoesMeshIntersect(Shape* shape, Ray* ray){
     return 0;
 }
 
+Vector3 shape_InterpolateTriangleNormal(Triangle* tri, Intersection* intsec){
+    Vector3 n1_comp = vec3_CreateCopy(&(tri->vn1));
+    Vector3 n2_comp = vec3_CreateCopy(&(tri->vn2));
+    Vector3 n3_comp = vec3_CreateCopy(&(tri->vn3));
+    float u = (*intsec).bay_coords.u;
+    float v = (*intsec).bay_coords.v;
+    vec3_MulVector(&n1_comp, (1.0f - u - v));
+    vec3_MulVector(&n2_comp, u);
+    vec3_MulVector(&n3_comp, v);
+
+    vec3_AddVectors(&n1_comp, &n2_comp);
+    vec3_AddVectors(&n1_comp, &n3_comp);
+
+    vec3_Normalize(&n1_comp);
+    return n1_comp;
+}
+
 //
 // SCENE
 //
@@ -1142,6 +1313,7 @@ int intsec_Create(Intersection* new_intsec, Ray* ray){
     new_intsec->ray = ray_CreateCopy(ray);
     new_intsec->t = ray->t_max;
     new_intsec->tri_idx = -1;
+    vec2_Create(&(new_intsec->bay_coords), -1.0f, -1.0f);
     Shape empty;
     shape_CreateEmpty(&empty);
     new_intsec->shape = empty;
@@ -1155,6 +1327,7 @@ Intersection intsec_CreateCopy(Intersection* intsec){
     new_intsec.t = intsec->t;
     new_intsec.mat = intsec->mat;
     new_intsec.tri_idx = intsec->tri_idx;
+    new_intsec.bay_coords = vec2_CreateCopy(&(intsec->bay_coords));
     return new_intsec;
 }
 
@@ -1183,7 +1356,7 @@ Vector3 intsec_GetIntersectNormal(Intersection* intsec){
         case MESH:
             if(intsec->tri_idx >= 0 && intsec->tri_idx < intsec_shape.mesh_size){
                 Triangle hit_tri = intsec_shape.mesh_tris[intsec->tri_idx];
-                normal = vec3_CreateCopy(&(hit_tri.normal));
+                normal = shape_InterpolateTriangleNormal(&hit_tri, intsec);
             } else {
                 printf("WARNING: invalid triangle index!");
                 vec3_Create(&normal, 0.0f, 1.0f, 0.0f);
@@ -1706,7 +1879,7 @@ int main(){
     scene_AddLight(&scene, &light2);
     Light light3;
     Vector3 light3_origin;
-    vec3_Create(&light3_origin, -2.0f, 2.0f, 0.0f);
+    vec3_Create(&light3_origin, -2.0f, 2.0f, 2.0f);
     light_Create(&light3, &light3_origin, &white, 5.0f);
     scene_AddLight(&scene, &light3);
 
@@ -1715,9 +1888,9 @@ int main(){
     Vector3 mesh_loc;
     Vector3 mesh_rot;
     vec3_Create(&mesh_loc, 0.0f, 1.25f, 0.0f);
-    vec3_Create(&mesh_rot, 0.0f, 5.0f*PI/4, -PI/16);
+    vec3_Create(&mesh_rot, 0.0f, 5.0f*PI/4, PI/16);
     char obj_file[] = "cow.obj";
-    shape_CreateMesh(&mesh, &diffuse_green_mat, &mesh_loc, obj_file, 0.35f, &mesh_rot);
+    shape_CreateMesh(&mesh, &reflect_gray_mat, &mesh_loc, obj_file, 0.35f, &mesh_rot);
     scene_AddShape(&scene, &mesh);
     // Create a sphere
     Shape sphere;
@@ -1731,6 +1904,12 @@ int main(){
     vec3_Create(&sphere2_loc, 3.0f, 3.0f, 2.5f);
     shape_CreateSphere(&sphere2, &light_pink_mat, &sphere2_loc, 0.85f);
     scene_AddShape(&scene, &sphere2);
+    // Create a sphere
+    Shape sphere3;
+    Vector3 sphere3_loc;
+    vec3_Create(&sphere3_loc, 1.0f, 3.0f, -2.5f);
+    shape_CreateSphere(&sphere3, &diffuse_green_mat, &sphere3_loc, 1.05f);
+    scene_AddShape(&scene, &sphere3);
 
     printf("Raytracing.\n");
     raytrace_multithreading(&final_img, &cam, &scene);
