@@ -18,6 +18,8 @@ SHAPE_MAX 16            // Maximum number of shapes allowed in a scene.
 
 LIGHT_MAX 16            // Maximum number of lights allowed in a scene.
 
+DEFAULT_SMOOTH_SHADING 1  // Enables/disables smooth shading. Overwrites any normal data supplied by the .obj file!
+
 
 raytrace.c:
 
